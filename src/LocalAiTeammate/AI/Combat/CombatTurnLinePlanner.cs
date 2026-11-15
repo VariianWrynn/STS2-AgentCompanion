@@ -326,7 +326,12 @@ internal sealed class CombatTurnLinePlanner
             next.EnergyGenerated += action.EnergyGain;
             next.CardsDrawn += action.CardsDrawn;
 
-            int effectiveBlock = action.Block + next.DexterityGained + next.TemporaryDexterityGained;
+            int effectiveBlock = action.Block;
+            if (ResolveCard(context, action.Action).HasEffect(EffectKind.GainBlock))
+            {
+                effectiveBlock += next.DexterityGained + next.TemporaryDexterityGained;
+            }
+
             if (effectiveBlock > 0)
             {
                 next.TotalBlockGained += effectiveBlock;
