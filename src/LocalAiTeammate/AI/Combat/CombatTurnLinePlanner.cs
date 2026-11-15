@@ -104,8 +104,13 @@ internal sealed class CombatTurnLinePlanner
 
         if (isOffensivePotion && vulnerable <= 0)
         {
-            vulnerable = 1;
-            appliesVulnerable = true;
+            vulnerable = action.CardId switch
+            {
+                "VULNERABLE_POTION" => 3,
+                "POTION_OF_BINDING" => 1,
+                _ => 0
+            };
+            appliesVulnerable = vulnerable > 0;
         }
 
         return new PlannableAction
