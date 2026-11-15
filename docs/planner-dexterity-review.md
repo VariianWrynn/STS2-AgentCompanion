@@ -27,9 +27,9 @@ dotnet run --project tests/PlannerDexterityRegression -- artifacts/build/LocalAi
 
 The harness constructs normalized card effects and action fixtures. It calls production `ResolvedCardViewExtensions.GetEstimatedBlock` and private `LineNode.Apply` from the actual built DLL through reflection. It checks accumulated block and does not reproduce the production formula in the test.
 
-Before the fix, 5 of 9 checks failed and the process exited 1. After the fix, all 9 passed and the process exited 0. The checks cover permanent and temporary dexterity, attacks, utility actions, a potion action, repeated attacks, ordinary block, zero-amount block effects, and block without added dexterity. The project build completed with 0 warnings and 0 errors.
+Before the fix, 5 of the initial 9 checks failed and the process exited 1. The coordinator requested an additional 12-block potion fixture. With that fixture, the baseline DLL from `codex/local-ai-baseline` fails 6 of 10 checks, including an incorrect 14-block result for the potion. The fixed DLL passes all 10 checks and exits 0. The checks cover permanent and temporary dexterity, attacks, utility actions, potion actions with and without modeled block, repeated attacks, ordinary block, zero-amount block effects, and block without added dexterity. The project build completed with 0 warnings and 0 errors.
 
-Local evidence is under `artifacts/verification/dexterity/`, including `before.txt`, `after.txt`, `build-after.txt`, and `DexterityPower.cs.txt`.
+Local evidence is under `artifacts/verification/dexterity/`, including `before.txt`, `before-extended.txt`, `after.txt`, `build-after.txt`, and `DexterityPower.cs.txt`.
 
 ## Limits and review
 

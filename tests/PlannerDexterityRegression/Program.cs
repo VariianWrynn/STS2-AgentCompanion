@@ -28,10 +28,12 @@ Type plannedActionType = plannerType.GetNestedType("PlannableAction", BindingFla
 MethodInfo apply = nodeType.GetMethod("Apply")!;
 MethodInfo getBlock = ModType("ResolvedCardViewExtensions").GetMethod("GetEstimatedBlock")!;
 int failures = 0;
+int checks = 0;
 
 Check("persistent dexterity then attack", 0, ("setup", 0, 2, 0), ("attack", null, 0, 0));
 Check("persistent dexterity then utility", 0, ("setup", 0, 2, 0), ("utility", null, 0, 0));
 Check("persistent dexterity then potion", 0, ("setup", 0, 2, 0), ("potion", null, 0, 0));
+Check("persistent dexterity then 12-block potion", 12, ("setup", 0, 2, 0), ("potion", 12, 0, 0));
 Check("persistent dexterity then two attacks", 0, ("setup", 0, 2, 0), ("attack", null, 0, 0), ("attack", null, 0, 0));
 Check("persistent dexterity then block", 7, ("setup", 0, 2, 0), ("block", 5, 0, 0));
 Check("persistent dexterity then zero-amount block effect", 2, ("setup", 0, 2, 0), ("block", 0, 0, 0));
@@ -39,7 +41,7 @@ Check("temporary dexterity then attack", 0, ("setup", 0, 0, 3), ("attack", null,
 Check("temporary dexterity then block", 8, ("setup", 0, 0, 3), ("block", 5, 0, 0));
 Check("block without added dexterity", 5, ("block", 5, 0, 0));
 
-Console.WriteLine($"Production LineNode.Apply regression checks: {9 - failures} passed, {failures} failed.");
+Console.WriteLine($"Production LineNode.Apply regression checks: {checks - failures} passed, {failures} failed.");
 return failures == 0 ? 0 : 1;
 
 Type ModType(string name) => mod.GetType("Sts2LlmCoop." + name, throwOnError: true)!;
@@ -50,6 +52,7 @@ object Dictionary(Type value) => Activator.CreateInstance(typeof(Dictionary<,>).
 
 void Check(string label, int expected, params (string Kind, int? Block, int Dexterity, int TemporaryDexterity)[] actions)
 {
+    checks++;
     object context = New("DeterministicCombatContext");
     object cards = Dictionary(ModType("ResolvedCardView"));
     Set(context, "HandCardsByInstanceId", cards);
@@ -87,7 +90,7 @@ void Check(string label, int expected, params (string Kind, int? Block, int Dext
         Set(planned, "Action", action);
         Set(planned, "ConsumptionKey", id);
         Set(planned, "ImmediateScore", New("CombatActionScore"));
-        Set(planned, "Block", getBlock.Invoke(null, [card]));
+        Set(planned, "Block", specification.Kind == "potion" ? specification.Block ?? 0 : getBlock.Invoke(null, [card]));
         Set(planned, "SelfDexterity", specification.Dexterity);
         Set(planned, "SelfTemporaryDexterity", specification.TemporaryDexterity);
         node = apply.Invoke(node, [context, planned])!;
