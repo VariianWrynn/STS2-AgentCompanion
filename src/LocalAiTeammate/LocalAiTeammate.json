@@ -1,0 +1,11 @@
+{
+  "id": "LocalAiTeammate",
+  "name": "Local AI teammate",
+  "author": "LocalAiTeammate contributors; upstream SallyHong2347 and brekkylab",
+  "description": "One human and one local rule AI using the multiplayer player and action systems.",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": true,
+  "dependencies": []
+}

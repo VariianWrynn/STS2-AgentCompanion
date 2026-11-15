@@ -1,0 +1,23 @@
+.godot/
+bin/
+/android/
+.git/
+.vs/
+publish/
+Properties/
+packages/
+*.user
+Directory.Build.props
+logs/-e
+# Build artifacts
+artifact.zip
+tmp_artifact/
+tmp_original.png
+deps/
+
+# build output
+obj/
+bin/
+.DS_Store
+.omc/
+.claude/
