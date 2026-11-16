@@ -28,6 +28,7 @@ OBSERVATION = {
     "Process": {"Pid": 1234, "StartTimeUtc": "2026-11-16T00:00:00Z", "Executable": None,
                 "AssemblyPath": "D:/fake/sts2.dll", "AssemblySha256": DIGEST, "ReleaseVersion": "v0.113.1"},
     "Scope": "no_companion_run", "Room": None, "Floor": None, "Host": None, "Ai": None,
+    "Submission": {"Observation": "a" * 32, "NextSequence": 1, "Gate": "unavailable", "Choices": []},
 }
 
 
@@ -37,6 +38,20 @@ class Backend(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def do_POST(self):
+        type(self).calls.append((self.path, self.headers.get("Authorization"), self.headers.get("X-Host-Sequence"),
+                                 self.headers.get("X-Host-Observation"), self.headers.get("X-Host-Choice"),
+                                 self.headers.get("Content-Length")))
+        sequence = int(self.headers["X-Host-Sequence"])
+        status = type(self).mode
+        if status == "wrong_sequence":
+            sequence, status = sequence + 1, "submitted"
+        body = json.dumps({"Sequence": sequence, "Status": status}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
         type(self).calls.append((self.path, self.headers.get("Authorization")))
@@ -124,9 +139,11 @@ class Regression(unittest.TestCase):
                                                     env={"HTTP_PROXY": "http://192.0.2.1:1", "NO_PROXY": ""})
                 async with Client(parameters, read_timeout_seconds=12) as client:
                     tools = (await client.list_tools()).tools
-                    self.assertEqual([tool.name for tool in tools], ["observe_host"])
+                    self.assertEqual([tool.name for tool in tools], ["observe_host", "submit_host"])
                     self.assertEqual(tools[0].input_schema.get("properties", {}), {})
                     self.assertNotIn("actor", json.dumps(tools[0].input_schema))
+                    self.assertEqual(set(tools[1].input_schema["properties"]), {"sequence", "observation", "choice"})
+                    self.assertFalse(tools[1].annotations.read_only_hint)
                     Backend.mode = "ok"
                     result = await client.call_tool("observe_host", {})
                     self.assertFalse(result.is_error)
@@ -142,6 +159,27 @@ class Regression(unittest.TestCase):
                     result = await client.call_tool("observe_host", {"actor": "host"})
                     self.assertTrue(result.is_error)
                     self.assertEqual(len(Backend.calls), call_count)
+                    payload = {"sequence": 1, "observation": "a" * 32, "choice": "b" * 32}
+                    for malformed in (payload | {"actor": 10002}, payload | {"sequence": True},
+                                      payload | {"sequence": "1"}, payload | {"observation": "bad"},
+                                      payload | {"choice": "b" * 33}, payload | {"sequence": 0},
+                                      payload | {"sequence": 9223372036854775807}, {"sequence": 1}):
+                        result = await client.call_tool("submit_host", malformed)
+                        self.assertTrue(result.is_error)
+                    self.assertEqual(len(Backend.calls), call_count)
+                    for status in ("submitted", "stale", "denied", "indeterminate", "expired", "in_flight", "conflict",
+                                   "sequence_rejected", "shutdown", "busy", "malformed"):
+                        Backend.mode = status
+                        result = await client.call_tool("submit_host", payload)
+                        self.assertFalse(result.is_error, status)
+                        self.assertEqual(result.structured_content, {"Sequence": 1, "Status": status})
+                        self.assertEqual(Backend.calls[-1], ("/v1/host/submit", "Bearer " + TOKEN, "1", "a" * 32, "b" * 32, "0"))
+                    for mode in ("unknown_receipt", "wrong_sequence"):
+                        Backend.mode = mode
+                        result = await client.call_tool("submit_host", payload)
+                        self.assertTrue(result.is_error)
+                        self.assertIn("invalid receipt", result.content[0].text)
+                        self.assertNotIn(TOKEN, result.content[0].text)
                     for mode, expected in [("malformed", "invalid observation"), ("hash", "identity"),
                                            ("scope", "invalid observation"), ("compatibility", "invalid observation"),
                                            ("oversized", "size limit"), ("auth", "authorization failed"),

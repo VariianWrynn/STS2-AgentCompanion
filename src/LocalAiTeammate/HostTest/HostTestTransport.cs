@@ -36,6 +36,7 @@ internal sealed class HostTestTransport : IDisposable
 {
     private readonly TcpListener _listener;
     private readonly HostObservationMailbox _mailbox;
+    private readonly HostSubmissionMailbox? _submissions;
     private readonly byte[] _token;
     private readonly SemaphoreSlim _handlers = new(8);
     private readonly ConcurrentDictionary<TcpClient, byte> _clients = new();
@@ -43,9 +44,10 @@ internal sealed class HostTestTransport : IDisposable
     private readonly Task _acceptLoop;
     private int _disposed;
 
-    internal HostTestTransport(HostBridgeConfig config, HostObservationMailbox mailbox)
+    internal HostTestTransport(HostBridgeConfig config, HostObservationMailbox mailbox, HostSubmissionMailbox? submissions = null)
     {
         _mailbox = mailbox;
+        _submissions = submissions;
         _token = Encoding.ASCII.GetBytes("Bearer " + config.Token);
         _listener = new TcpListener(IPAddress.Loopback, config.Port);
         _listener.Start(16);
@@ -97,9 +99,33 @@ internal sealed class HostTestTransport : IDisposable
                 await RespondAsync(stream, 401, null, deadline.Token).ConfigureAwait(false);
                 return;
             }
-            if (lines[0] != "GET /v1/host/observation HTTP/1.1" || headers.ContainsKey("Origin") ||
+            var observe = lines[0] == "GET /v1/host/observation HTTP/1.1";
+            var submit = lines[0] == "POST /v1/host/submit HTTP/1.1" && _submissions is not null;
+            if ((!observe && !submit) || headers.ContainsKey("Origin") ||
                 headers.ContainsKey("Transfer-Encoding") ||
                 (headers.TryGetValue("Content-Length", out var length) && length != "0"))
+            {
+                await RespondAsync(stream, 400, null, deadline.Token).ConfigureAwait(false);
+                return;
+            }
+            var commandHeaders = headers.Keys.Where(k => k.StartsWith("X-Host-", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (submit)
+            {
+                if (commandHeaders.Length != 3 || !headers.TryGetValue("X-Host-Sequence", out var sequenceText) ||
+                    !long.TryParse(sequenceText, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var sequence) ||
+                    sequence <= 0 || sequence == long.MaxValue || sequence.ToString(System.Globalization.CultureInfo.InvariantCulture) != sequenceText ||
+                    !headers.TryGetValue("X-Host-Observation", out var observation) || !HostSubmissionMailbox.Token(observation) ||
+                    !headers.TryGetValue("X-Host-Choice", out var choice) || !HostSubmissionMailbox.Token(choice) ||
+                    headers.Keys.Any(k => k.Contains("actor", StringComparison.OrdinalIgnoreCase)))
+                {
+                    await RespondAsync(stream, 400, null, deadline.Token).ConfigureAwait(false);
+                    return;
+                }
+                var receipt = await _submissions!.SubmitAsync(new HostSubmission(sequence, observation, choice), TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                await RespondAsync(stream, 200, receipt, deadline.Token).ConfigureAwait(false);
+                return;
+            }
+            if (commandHeaders.Length != 0)
             {
                 await RespondAsync(stream, 400, null, deadline.Token).ConfigureAwait(false);
                 return;
@@ -144,7 +170,7 @@ internal sealed class HostTestTransport : IDisposable
         throw new InvalidDataException("Request header exceeds limit.");
     }
 
-    private static async Task RespondAsync(NetworkStream stream, int status, ObservationReply? reply, CancellationToken cancellation)
+    private static async Task RespondAsync(NetworkStream stream, int status, object? reply, CancellationToken cancellation)
     {
         var body = reply is null ? [] : JsonSerializer.SerializeToUtf8Bytes(reply);
         var reason = status switch { 200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 504 => "Gateway Timeout", _ => "Service Unavailable" };
@@ -158,6 +184,7 @@ internal sealed class HostTestTransport : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _shutdown.Cancel();
         _mailbox.Dispose();
+        _submissions?.Dispose();
         _listener.Stop();
         foreach (var client in _clients.Keys) client.Dispose();
     }
