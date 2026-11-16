@@ -30,7 +30,7 @@ internal sealed partial class AiTeammateDummyController
     private string? _pendingEndTurnActionSetFingerprint;
     private DateTime _pendingEndTurnCommitAtUtc = DateTime.MinValue;
     private string? _lastDeduplicationKey;
-    private int _lastCompletedEndTurnRound = -1;
+    private IssuedPlayerTurn? _lastFinishedEndTurn;
     private int _lastCombatRoundWithInitialStagger = -1;
     private PendingIssuedActionSettlement? _pendingIssuedActionSettlement;
 
@@ -63,7 +63,7 @@ internal sealed partial class AiTeammateDummyController
         List<AiTeammateAvailableAction> decisionActions = BuildDecisionActions(availableActions);
         bool isCombatDecision = TryGetControlledPlayer(out Player promptPlayer, out _)
             && IsCombatDecisionWindow(promptPlayer);
-        ResetCompletedEndTurnTrackingIfNeeded(isCombatDecision ? promptPlayer : null, isCombatDecision);
+        ResetCompletedEndTurnTrackingIfNeeded(promptPlayer, isCombatDecision);
         string actionSetFingerprint = decisionActions.Count > 0
             ? BuildActionSetFingerprint(decisionActions)
             : string.Empty;
@@ -230,6 +230,13 @@ internal sealed partial class AiTeammateDummyController
         try
         {
             AiActionExecutionResult executionResult = await action.ExecuteAsync();
+            if (executionResult.WasStale)
+            {
+                WriteAudit("stale", action.ActionId, action.ActionType);
+                return;
+            }
+
+            if (!executionResult.HasTrackedGameAction) ValidateEndTurnExecution(action, executionResult);
             if (!executionResult.HasTrackedGameAction) WriteAudit("settled", action.ActionId, action.ActionType);
             if (!executionResult.HasTrackedGameAction && !string.IsNullOrEmpty(action.DeduplicationKey))
             {
@@ -244,11 +251,6 @@ internal sealed partial class AiTeammateDummyController
             else
             {
                 Log.Info($"[AITeammate] Player={PlayerId} executed non-tracked actionId={action.ActionId}");
-                if (IsCombatEndTurnAction(action.ActionId) &&
-                    TryGetControlledPlayer(out Player controlledPlayer, out _))
-                {
-                    _lastCompletedEndTurnRound = controlledPlayer.Creature.CombatState?.RoundNumber ?? _lastCompletedEndTurnRound;
-                }
             }
         }
         catch (Exception exception)
@@ -411,34 +413,29 @@ internal sealed partial class AiTeammateDummyController
             return false;
         }
 
-        int currentRound = player.Creature.CombatState?.RoundNumber ?? -1;
-        if (currentRound != _lastCompletedEndTurnRound)
+        if (_lastFinishedEndTurn == null || !_lastFinishedEndTurn.Matches(player)
+            || decisionActions.Count == 0
+            || decisionActions.Any(action => !IsEndTurnAction(action)
+                || !_lastFinishedEndTurn.Equals(action.IssuedEndTurn)))
         {
             return false;
         }
 
-        if (decisionActions.Count == 0 || decisionActions.Any(action => !IsEndTurnAction(action)))
-        {
-            return false;
-        }
-
-        Log.Info($"[AITeammate] Player={PlayerId} suppressing repeated end turn for round={currentRound} while combat state settles.");
+        Log.Info($"[AITeammate] Player={PlayerId} suppressing repeated end turn for nativeTurn={_lastFinishedEndTurn.NativeTurnNumber} while combat state settles.");
         return true;
     }
 
     private void ResetCompletedEndTurnTrackingIfNeeded(Player? player, bool isCombatDecision)
     {
-        if (!isCombatDecision || player?.Creature?.CombatState == null)
+        if (player?.Creature.CombatState != null && player.PlayerCombatState != null
+            && _lastFinishedEndTurn != null && !_lastFinishedEndTurn.Matches(player))
         {
-            _lastCompletedEndTurnRound = -1;
-            _lastCombatRoundWithInitialStagger = -1;
-            return;
+            _lastFinishedEndTurn = null;
         }
 
-        int currentRound = player.Creature.CombatState.RoundNumber;
-        if (currentRound != _lastCompletedEndTurnRound)
+        if (!isCombatDecision || player?.Creature.CombatState == null)
         {
-            _lastCompletedEndTurnRound = -1;
+            _lastCombatRoundWithInitialStagger = -1;
         }
     }
 
@@ -488,14 +485,30 @@ internal sealed partial class AiTeammateDummyController
                || IsCombatEndTurnAction(action.ActionId);
     }
 
+    private static void ValidateEndTurnExecution(AiTeammateAvailableAction action, AiActionExecutionResult result)
+    {
+        if (IsEndTurnAction(action) || action.IssuedEndTurn != null
+            || result.IssuedEndTurn != null || result.GameAction is EndPlayerTurnAction)
+        {
+            if (!IsEndTurnAction(action) || action.IssuedEndTurn == null
+                || !ReferenceEquals(action.IssuedEndTurn, result.IssuedEndTurn)
+                || result.GameAction is not EndPlayerTurnAction)
+            {
+                throw new InvalidOperationException("Combat EndTurn requires a tracked native action with its exact issued identity.");
+            }
+        }
+    }
+
     private void BeginIssuedActionSettlement(AiTeammateAvailableAction action, AiActionExecutionResult executionResult)
     {
+        ValidateEndTurnExecution(action, executionResult);
         _pendingIssuedActionSettlement = new PendingIssuedActionSettlement
         {
             ActionId = action.ActionId,
             ActionType = action.ActionType,
             GameAction = executionResult.GameAction!,
             IssuedAtUtc = DateTime.UtcNow,
+            IssuedEndTurn = executionResult.IssuedEndTurn,
             WaitForQueueSettle = executionResult.WaitForQueueSettle
         };
     }
@@ -518,11 +531,6 @@ internal sealed partial class AiTeammateDummyController
                 WriteAudit("settled", settlement.ActionId, settlement.ActionType);
                 settlement.ActionCompleted = true;
                 settlement.ActionCompletedAtUtc = now;
-                if (IsCombatEndTurnAction(settlement.ActionId) &&
-                    TryGetControlledPlayer(out Player controlledPlayer, out _))
-                {
-                    settlement.CompletedEndTurnRound = controlledPlayer.Creature.CombatState?.RoundNumber;
-                }
 
                 Log.Info($"[AITeammate] Player={PlayerId} action settled actionId={settlement.ActionId} state={settlement.GameAction.State}");
             }
@@ -569,9 +577,12 @@ internal sealed partial class AiTeammateDummyController
             return true;
         }
 
-        if (settlement.CompletedEndTurnRound.HasValue)
+        if (settlement.IssuedEndTurn != null
+            && settlement.GameAction.State == GameActionState.Finished
+            && settlement.GameAction.CompletionTask.IsCompletedSuccessfully
+            && settlement.GameAction.Exception == null)
         {
-            _lastCompletedEndTurnRound = settlement.CompletedEndTurnRound.Value;
+            _lastFinishedEndTurn = settlement.IssuedEndTurn;
         }
 
         Log.Info($"[AITeammate] Player={PlayerId} ready to replan after actionId={settlement.ActionId}");
@@ -657,7 +668,7 @@ internal sealed partial class AiTeammateDummyController
 
         public DateTime? GraceEndsAtUtc { get; set; }
 
-        public int? CompletedEndTurnRound { get; set; }
+        public IssuedPlayerTurn? IssuedEndTurn { get; init; }
 
         public bool StallReported { get; set; }
     }

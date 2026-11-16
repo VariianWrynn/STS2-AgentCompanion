@@ -125,7 +125,8 @@ internal sealed partial class AiTeammateDummyController
                 + "but none is playable for a reason other than energy; only end turn is offered.");
         }
 
-        actions.Add(new AiTeammateAvailableAction(
+        IssuedPlayerTurn issued = IssuedPlayerTurn.Capture(player);
+        actions.Add(AiTeammateAvailableAction.ForEndTurn(
             new AiLegalActionOption
             {
                 ActionId = BuildEndTurnActionId(player),
@@ -134,16 +135,17 @@ internal sealed partial class AiTeammateDummyController
                 Label = "End turn",
                 Summary = "Finish the actor's current turn."
             },
+            issued,
             () =>
             {
-                int roundNumber = player.Creature?.CombatState?.RoundNumber ?? 0;
-                EndPlayerTurnAction endTurnAction = new(player, roundNumber);
-                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(endTurnAction);
-                return Task.FromResult(new AiActionExecutionResult
+                if (!issued.Matches(player))
                 {
-                    GameAction = endTurnAction,
-                    WaitForQueueSettle = true
-                });
+                    return Task.FromResult(AiActionExecutionResult.Stale);
+                }
+
+                EndPlayerTurnAction endTurnAction = new(player, issued.NativeTurnNumber);
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(endTurnAction);
+                return Task.FromResult(AiActionExecutionResult.ForEndTurn(endTurnAction, issued));
             }));
 
         return actions;
