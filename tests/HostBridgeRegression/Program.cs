@@ -123,8 +123,10 @@ var playerView = new HostPlayerObservation(1, "Play", false, 1, 80, 80, 99, 3, 5
 var fakeObservation = new HostObservation("observe_host", "runtime_unverified", processView, "host",
     "CombatRoom", 1, playerView, playerView with { NetId = 10002 });
 var httpCaptures = 0;
+var httpDispatches = 0;
 using (var mailbox = new HostObservationMailbox(() => { httpCaptures++; return fakeObservation; }))
-using (var transport = new HostTestTransport(config, mailbox))
+using (var submissions = new HostSubmissionMailbox(_ => { httpDispatches++; return "submitted"; }))
+using (var transport = new HostTestTransport(config, mailbox, submissions))
 using (var client = new HttpClient(new HttpClientHandler { UseProxy = false })
        { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(5) })
 {
@@ -233,5 +235,38 @@ using (var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         catch (IOException) { closed = true; }
         Check(closed && httpCaptures == 2, "HTTP closes stalled headers within the read deadline without capture");
     }
+
+    var tokenA = new string('a', 32);
+    var tokenB = new string('b', 32);
+    var postHeaders = $"X-Host-Sequence: 1\r\nX-Host-Observation: {tokenA}\r\nX-Host-Choice: {tokenB}\r\nContent-Length: 0\r\n";
+    foreach (var invalidPost in new[] {
+        postHeaders.Replace("X-Host-Sequence: 1", "X-Host-Sequence: 01"),
+        postHeaders.Replace("X-Host-Sequence: 1", "X-Host-Sequence: 9223372036854775807"),
+        postHeaders.Replace("X-Host-Choice: " + tokenB, "X-Host-Choice: bad"),
+        postHeaders + "X-Host-Actor: 10002\r\n", postHeaders + "Actor: 10002\r\n",
+        postHeaders.Replace("Content-Length: 0", "Content-Length: 2"),
+        postHeaders + "Transfer-Encoding: chunked\r\n", postHeaders + "X-Host-Sequence: 1\r\n" })
+    {
+        var response = await RawAsync("POST /v1/host/submit HTTP/1.1\r\n" + auth + invalidPost + "\r\n");
+        Check(response.StartsWith("HTTP/1.1 400") && httpDispatches == 0 && submissions.NextSequence == 1,
+            "malformed submit headers deny without sequence consumption or native dispatch");
+    }
+    var post = RawAsync("POST /v1/host/submit HTTP/1.1\r\n" + auth + postHeaders + "\r\n", fragmented: true);
+    frameDeadline.Restart();
+    while (!post.IsCompleted && frameDeadline.Elapsed < TimeSpan.FromSeconds(4))
+    {
+        submissions.Drain();
+        await Task.Delay(5);
+    }
+    var postResponse = await post;
+    Check(postResponse.StartsWith("HTTP/1.1 200") && postResponse.Contains("\"Status\":\"submitted\"") && httpDispatches == 1,
+        "zero-body fragmented POST reaches the production main-thread command mailbox exactly once");
+    var duplicatePost = await RawAsync("POST /v1/host/submit HTTP/1.1\r\n" + auth + postHeaders + "\r\n");
+    Check(duplicatePost == postResponse && httpDispatches == 1, "HTTP identical retry returns original receipt without a frame or second dispatch");
+    var expiredPost = await RawAsync("POST /v1/host/submit HTTP/1.1\r\n" + auth + postHeaders.Replace("Sequence: 1", "Sequence: 2") + "\r\n");
+    submissions.Drain();
+    Check(expiredPost.Contains("\"Status\":\"expired\"") && httpDispatches == 1 && submissions.NextSequence == 3,
+        "HTTP unavailable-frame mutation expires with no late native effect");
 }
+await HostTurnRegression.Run();
 Console.WriteLine("Host bridge regression passed. Only a test-owned loopback listener was opened. No game or profile was opened.");

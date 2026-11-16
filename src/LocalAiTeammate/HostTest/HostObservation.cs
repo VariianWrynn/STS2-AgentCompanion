@@ -6,4 +6,4 @@ internal sealed record HostPlayerObservation(ulong NetId, string? Phase, bool? R
     int? Round, decimal Hp, decimal MaxHp, decimal Gold, decimal? Energy, int? HandCount);
 internal sealed record HostObservation(string Capability, string Compatibility, HostProcessIdentity Process,
     string Scope, string? Room = null, int? Floor = null,
-    HostPlayerObservation? Host = null, HostPlayerObservation? Ai = null);
+    HostPlayerObservation? Host = null, HostPlayerObservation? Ai = null, HostChoices? Submission = null);
