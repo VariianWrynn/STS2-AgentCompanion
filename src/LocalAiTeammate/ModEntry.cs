@@ -47,6 +47,8 @@ public static class ModEntry
                 controller.WriteAudit("session");
         };
 
+        HostTest.HostTestBridge.StartIfRequested();
+
         Log.Info($"[{ModId}] Initialization complete");
         Log.Info($"[{ModId}] ============================================================");
     }
