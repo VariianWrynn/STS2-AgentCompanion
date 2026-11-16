@@ -74,6 +74,26 @@ internal static class Program
         Equal("BASH applies vulnerable", true, Get<bool>(bashPlan, "AppliesVulnerable"));
         Equal("BASH retains follow-up vulnerable bonus", 9, FollowUpDamage(cardContext, bashPlan));
 
+        Equal("BASH does not amplify its own first hit", 8, DamageSequence(cardContext, bashPlan));
+        object secondBash = Plan(cardContext, CardAction(cardContext, "second_bash", NativeId("Cards.Bash"), 8, 2));
+        Equal("BASH then BASH amplifies only the second hit", 20, DamageSequence(cardContext, bashPlan, secondBash));
+        object strikePlan = Plan(cardContext, CardAction(cardContext, "timing_strike", "STRIKE", 6, 0));
+        Equal("strike then BASH does not apply vulnerable backward", 14, DamageSequence(cardContext, strikePlan, bashPlan));
+        Equal("BASH then strike totals native-order damage", 17, DamageSequence(cardContext, bashPlan, strikePlan));
+        Equal("prior vulnerable potion still amplifies BASH", 12, DamageSequence(cardContext, singlePotion, bashPlan));
+
+        foreach (var card in new[] { (Name: "BeamCell", Damage: 3, Vulnerable: 1), (Name: "Break", Damage: 20, Vulnerable: 5) })
+        {
+            object context = Context();
+            string id = NativeId("Cards." + card.Name);
+            object attack = Plan(context, CardAction(context, "timing_attack", id, card.Damage, card.Vulnerable));
+            object followUp = Plan(context, CardAction(context, "timing_follow_up", "STRIKE", 6, 0));
+            Equal(id + " does not amplify its own first hit", card.Damage, DamageSequence(context, attack));
+            Equal(id + " still amplifies the following attack", card.Damage + 9, DamageSequence(context, attack, followUp));
+        }
+        object unknown = Plan(cardContext, CardAction(cardContext, "unknown_timing", "UNVERIFIED_CARD", 8, 2));
+        Equal("unverified card timing retains existing behavior", 12, DamageSequence(cardContext, unknown));
+
         Console.WriteLine($"Production planner potion checks: {_checks - _failures} passed, {_failures} failed.");
         return _failures == 0 ? 0 : 1;
     }
@@ -186,6 +206,18 @@ internal static class Program
         object followUp = Plan(context, CardAction(context, "strike", "STRIKE", 6, 0));
         node = apply.Invoke(node, [context, followUp])!;
         return Get<int>(node, "TotalDamageDealt") - damageBeforeFollowUp;
+    }
+
+    private static int DamageSequence(object context, params object[] plannedActions)
+    {
+        Type nodeType = ModType("CombatTurnLinePlanner").GetNestedType("LineNode", BindingFlags.NonPublic)!;
+        MethodInfo apply = nodeType.GetMethod("Apply")!;
+        object node = Activator.CreateInstance(nodeType, [10])!;
+        foreach (object planned in plannedActions)
+        {
+            node = apply.Invoke(node, [context, planned])!;
+        }
+        return Get<int>(node, "TotalDamageDealt");
     }
 
     private static void Equal<T>(string label, T expected, T actual)
