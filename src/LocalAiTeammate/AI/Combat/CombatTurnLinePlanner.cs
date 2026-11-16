@@ -359,7 +359,10 @@ internal sealed class CombatTurnLinePlanner
             if (action.Damage > 0 && !string.IsNullOrEmpty(action.Action.TargetId))
             {
                 int dealtDamage = action.Damage + (next.StrengthGained + next.TemporaryStrengthGained) * action.DamageHits;
-                if (next._vulnerableTargets.Contains(action.Action.TargetId))
+                HashSet<string> vulnerableAtDamage = action.Action.CardId is "BASH" or "BEAM_CELL" or "BREAK"
+                    ? _vulnerableTargets
+                    : next._vulnerableTargets;
+                if (vulnerableAtDamage.Contains(action.Action.TargetId))
                 {
                     dealtDamage += (int)Math.Ceiling(dealtDamage * 0.5m);
                 }
