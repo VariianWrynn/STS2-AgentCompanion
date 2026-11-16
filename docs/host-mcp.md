@@ -1,6 +1,6 @@
 # Host observation and submission protocol
 
-The optional host bridge reports detached host and AI state for a local companion run and offers one native host action, `EndTurn`. The [MCP adapter](../mcp/host_observer/README.md) exposes `observe_host()` and `submit_host(sequence, observation, choice)`. It never chooses an action. The second player's existing local rule controller runs independently. Runtime and full-game compatibility remain unverified.
+The optional host bridge reports detached host and AI state for a local companion run and offers native host `EndTurn` and bounded `PlayCard` choices. The [MCP adapter](../mcp/host_observer/README.md) exposes `observe_host()` and `submit_host(sequence, observation, choice)`. It never chooses an action. The second player's existing local rule controller runs independently. Runtime and full-game compatibility remain unverified.
 
 ## Activation
 
@@ -57,7 +57,8 @@ JSON property names are case-sensitive PascalCase. Successful responses have thi
 			"Observation": "0123456789abcdef0123456789abcdef",
 			"NextSequence": 1,
 			"Gate": "available",
-			"Choices": [{"Key": "abcdef0123456789abcdef0123456789", "Kind": "EndTurn", "Label": "End turn"}]
+			"Choices": [{"Key": "abcdef0123456789abcdef0123456789", "Kind": "EndTurn", "Label": "End turn"}],
+			"Diagnostic": null
 		}
 	}
 }
@@ -84,7 +85,7 @@ The adapter uses `TcpListener` and accepts one HTTP/1.1 request per connection. 
 
 The read mailbox stores at most 64 queued observations and drains at most ten entries per frame. The command mailbox holds one latest request and receipt. Each frame claims at most one host submission before draining reads. Work moves atomically from queued to claimed to done, or from queued to expired. Deadlines use a monotonic clock. Expired queued requests never execute on a later frame. Expired read entries retain their bounded queue slots until a frame drains them or shutdown clears them.
 
-All native checks and reads run synchronously on the initialization thread through `SceneTree.ProcessFrame`. Worker threads receive detached record values. The bridge reads existing room and player fields only. It does not click a chest, open merchant inventory, create peer state, or invoke the AI controller.
+All native checks and reads run synchronously on the initialization thread through `SceneTree.ProcessFrame`. Worker threads receive detached record values. Observations read existing room and player fields. It does not click a chest, open merchant inventory, create peer state, or invoke the AI controller.
 
 A claimed read cannot be interrupted. Its caller can time out while the capture completes. Tree exit closes the listener, removes the callback, and completes queued and claimed waiters. Listener failure stops admission and completes mailbox waiters. Shutdown cannot make a blocked native getter return.
 
@@ -125,12 +126,26 @@ One driver owns a process-scoped monotonic sequence. The bridge retains only the
 
 After a timeout, lost response, or `in_flight`, retry only the identical request. A claimed request is never executed twice. The caller waits at most two seconds. A queued timeout becomes `expired`, while a claimed timeout stays in flight until its original receipt is available. An uncertain native effect never clears its gate on a timer.
 
-`Submission.Gate` is `available`, `unavailable`, `pending`, or `indeterminate`. Only `available` has a choice. Within the same combat, a pending action requires successful native completion plus observed host readiness, a phase transition, or a new native player turn before the gate clears. Successful completion also clears the old pending action when a valid observation establishes a different native combat, run, or session. A new combat can start at the same player turn number and reuse UI objects. Hand or scene replacement alone cannot settle the action. Unknown context, incomplete actions, timeouts, native failure, cancellation, and indeterminate effects never clear the gate. Context replacement preserves the process sequence and latest immutable receipt. Completion alone does not imply whole-combat settlement. Observations remain available. This slice has no reconciliation mutation API; stop the owned test and use a fresh test process after reviewing an indeterminate result.
+`Submission.Gate` is `available`, `unavailable`, `pending`, or `indeterminate`. Only `available` has choices. Within the same combat, a pending EndTurn requires successful native completion plus observed host readiness, a phase transition, or a new native player turn before the gate clears. Successful completion also clears the old pending action when a valid observation establishes a different native combat, run, or session. A new combat can start at the same player turn number and reuse UI objects. Hand or scene replacement alone cannot settle the action. Unknown context, incomplete actions, timeouts, native failure, cancellation, and indeterminate effects never clear the gate. Context replacement preserves the process sequence and latest immutable receipt. Completion alone does not imply whole-combat settlement. Observations remain available. This slice has no reconciliation mutation API; stop the owned test and use a fresh test process after reviewing an indeterminate result.
 
-Queue listeners attach when native run setup creates the queue and rebind when it changes. Tree exit removes combat and queue listeners. No card, potion, shop, lobby, menu, profile, or save action exists in this slice.
+Queue listeners attach when native run setup creates the queue and rebind when it changes. Tree exit removes combat and queue listeners. No potion, shop, lobby, menu, profile, or save action exists in this slice.
+
+## Bounded card choices
+
+An available observation contains at most 256 choices. EndTurn uses one slot. Each remaining `PlayCard` key identifies an exact native card and target pair. Labels contain the native type, hand position, and either the enemy combat ID or self. Keys carry the identity. A caller cannot select a card, actor, or target by supplying an ID. Labels are at most 128 characters.
+
+The supported cards are the exact native `StrikeIronclad`, `DefendIronclad`, and `Bash` types, including their upgraded forms. Enchantments, afflictions, energy X costs, and star X costs are excluded. Only `AnyEnemy` and `Self` targeting are supported. Self uses a null native target.
+
+Offer and dispatch both check native `CanPlayTargeting`. Dispatch also rechecks ownership, reference membership in the original authoritative hand, the exact live holder and card node, and the hand peek state. An enemy must remain alive and hittable in the same native combat, with its original combat ID. The bridge runs native enqueue VFX and requests a retained `PlayCardAction` through the synchronizer. Native code owns resource spending, pile movement, and queue UI.
+
+A card releases its pending gate only after successful native completion and departure from the original hand, with the host eligible for another command. This permits another card in the same turn. A valid combat, run, or session replacement can also release a successfully completed card. Completed actions whose card remains in hand stay pending. Unknown context, incomplete actions, timeouts, failures, cancellations, and ambiguous enqueue never release the gate. The retained action tracker latches cancellation before VFX or enqueue, including cancellation later overwritten by native Finished.
+
+`Submission.Diagnostic` is nullable. Pending observations can report `native_pending`, `host_choice_required`, `completed_card_in_original_hand`, or `awaiting_host_readiness`. Indeterminate observations report `native_failure` or `enqueue_ambiguous`. Detected hand selection reports `host_choice_required`. Other unresolved native choices can remain generic pending. Native host selections remain blocked for a future explicit MCP choice command. Basic card hooks can still request a selection. The bridge never installs a host AI selector.
+
+This bounded capability does not cover a full run's expanded deck. Native targeted play, Defend, host resource and effect changes, hand and queue UI, same-turn chaining, stale-target rejection, cancellation, and continued autonomous second-player progress still require an owned gameplay session.
 
 ## Offline regression
 
-Run `dotnet run --project tests/HostBridgeRegression/HostBridgeRegression.csproj -c Release` from the repository root. The program compiles the production mailboxes, command domain, identity policy, detached records, and transport. It opens a test-owned loopback listener with fake native boundaries. It does not start the game or open a profile. Coverage includes read frame budgets, overflow, expiry, unavailable frames, exceptions, claimed timeout, shutdown, identity denial, disabled activation, authorization, invalid forms, fragmentation, header limits, slow headers, exact JSON output, command replay, sequence conflicts, context invalidation, pending and uncertain gates, and no late dispatch. A source assertion checks the native player-turn binding; it does not execute native gameplay.
+Run `dotnet run --project tests/HostBridgeRegression/HostBridgeRegression.csproj -c Release` from the repository root. The program compiles the production mailboxes, command domain, native action tracker, identity policy, detached records, and transport. The native tracker uses a controllable action double in this harness. It opens a test-owned loopback listener with fake native boundaries. It does not start the game or open a profile. Coverage includes read frame budgets, overflow, expiry, unavailable frames, exceptions, claimed timeout, shutdown, identity denial, disabled activation, authorization, invalid forms, fragmentation, header limits, slow headers, exact JSON output, command replay, sequence conflicts, context invalidation, pending and uncertain gates, and no late dispatch. A source assertion checks the native player-turn binding; it does not execute native gameplay.
 
 Run `./scripts/build.ps1` to compile the real mod against the installed assembly. Offline regressions and a successful build do not verify Godot callback lifetime, gameplay, or companion correctness. Those checks require a separately owned empty-profile game session through the project's gameplay verifier.

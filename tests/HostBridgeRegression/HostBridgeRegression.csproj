@@ -10,6 +10,7 @@
     <Compile Include="../../src/LocalAiTeammate/HostTest/HostIdentityPolicy.cs" Link="HostIdentityPolicy.cs" />
     <Compile Include="../../src/LocalAiTeammate/HostTest/HostTestTransport.cs" Link="HostTestTransport.cs" />
     <Compile Include="../../src/LocalAiTeammate/HostTest/HostObservation.cs" Link="HostObservation.cs" />
+    <Compile Include="../../src/LocalAiTeammate/HostTest/NativeAction.cs" Link="NativeAction.cs" />
     <Compile Include="../../src/LocalAiTeammate/HostTest/HostTurnCommands.cs" Link="HostTurnCommands.cs" />
     <Compile Include="../../src/LocalAiTeammate/HostTest/HostSubmissionMailbox.cs" Link="HostSubmissionMailbox.cs" />
   </ItemGroup>

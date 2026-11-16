@@ -28,7 +28,7 @@ OBSERVATION = {
     "Process": {"Pid": 1234, "StartTimeUtc": "2026-11-16T00:00:00Z", "Executable": None,
                 "AssemblyPath": "D:/fake/sts2.dll", "AssemblySha256": DIGEST, "ReleaseVersion": "v0.113.1"},
     "Scope": "no_companion_run", "Room": None, "Floor": None, "Host": None, "Ai": None,
-    "Submission": {"Observation": "a" * 32, "NextSequence": 1, "Gate": "unavailable", "Choices": []},
+    "Submission": {"Observation": "a" * 32, "NextSequence": 1, "Gate": "unavailable", "Choices": [], "Diagnostic": None},
 }
 
 
@@ -69,10 +69,24 @@ class Backend(BaseHTTPRequestHandler):
                 pass
             return
         observation = deepcopy(OBSERVATION)
-        if mode == "host":
+        if mode in ("host", "cards", "max_cards", "too_many_cards", "bad_card_kind", "long_card_label", "choice_required", "card_noop", "bad_diagnostic"):
             player = {"NetId": 1, "Phase": "Play", "Ready": False, "Round": 1,
                       "Hp": 80, "MaxHp": 80, "Gold": 99, "Energy": 3, "HandCount": 5}
             observation.update(Scope="host", Room="CombatRoom", Floor=1, Host=player, Ai=player | {"NetId": 2})
+        if mode in ("cards", "max_cards", "too_many_cards", "bad_card_kind", "long_card_label"):
+            count = 256 if mode == "max_cards" else 257 if mode == "too_many_cards" else 3
+            choices = [{"Key": format(index, "032x"), "Kind": "EndTurn" if index == 0 else "PlayCard",
+                        "Label": "End turn" if index == 0 else "Play StrikeIronclad hand 2147483647 on enemy 4294967295"}
+                       for index in range(count)]
+            if mode == "bad_card_kind":
+                choices[1]["Kind"] = "playcard"
+            if mode == "long_card_label":
+                choices[1]["Label"] = "x" * 129
+            observation["Submission"].update(Gate="available", Choices=choices)
+        if mode in ("choice_required", "card_noop", "bad_diagnostic"):
+            observation["Submission"].update(Gate="pending", Diagnostic={
+                "choice_required": "host_choice_required", "card_noop": "completed_card_in_original_hand",
+                "bad_diagnostic": "private_native_details"}[mode])
         if mode in ("no_run_state", "host_scope_denied"):
             observation["Scope"] = mode
         if mode == "hash":
@@ -155,6 +169,29 @@ class Regression(unittest.TestCase):
                         self.assertFalse(result.is_error, mode)
                         self.assertEqual(result.structured_content["Scope"], mode)
                         self.assertEqual(result.structured_content["Compatibility"], "runtime_unverified")
+                    for mode in ("cards", "max_cards"):
+                        Backend.mode = mode
+                        result = await client.call_tool("observe_host", {})
+                        self.assertFalse(result.is_error, mode)
+                        choices = result.structured_content["Submission"]["Choices"]
+                        self.assertEqual(len(choices), 256 if mode == "max_cards" else 3)
+                        self.assertEqual(choices[0]["Kind"], "EndTurn")
+                        self.assertTrue(all(item["Kind"] == "PlayCard" for item in choices[1:]))
+                        self.assertLess(len(json.dumps({"Status": "ok", "Observation": result.structured_content}).encode()),
+                                        observer.MAX_RESPONSE_BYTES)
+                    for mode, diagnostic in (("choice_required", "host_choice_required"),
+                                             ("card_noop", "completed_card_in_original_hand")):
+                        Backend.mode = mode
+                        result = await client.call_tool("observe_host", {})
+                        self.assertFalse(result.is_error, mode)
+                        self.assertEqual(result.structured_content["Submission"]["Gate"], "pending")
+                        self.assertEqual(result.structured_content["Submission"]["Diagnostic"], diagnostic)
+                        self.assertEqual(result.structured_content["Submission"]["Choices"], [])
+                    for mode in ("too_many_cards", "bad_card_kind", "long_card_label", "bad_diagnostic"):
+                        Backend.mode = mode
+                        result = await client.call_tool("observe_host", {})
+                        self.assertTrue(result.is_error, mode)
+                        self.assertIn("invalid observation", result.content[0].text)
                     call_count = len(Backend.calls)
                     result = await client.call_tool("observe_host", {"actor": "host"})
                     self.assertTrue(result.is_error)

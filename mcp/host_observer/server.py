@@ -1,4 +1,4 @@
-"""MCP adapter for the optional local host observation and EndTurn bridge."""
+"""MCP adapter for the optional local host observation and bounded native command bridge."""
 
 import argparse
 from dataclasses import dataclass, field
@@ -93,15 +93,17 @@ class HostPlayer(DetachedRecord):
 
 class HostChoice(DetachedRecord):
     Key: str = Field(pattern=r"^[a-f0-9]{32}$")
-    Kind: Literal["EndTurn"]
-    Label: Literal["End turn"]
+    Kind: Literal["EndTurn", "PlayCard"]
+    Label: str = Field(min_length=1, max_length=128)
 
 
 class HostChoices(DetachedRecord):
     Observation: str = Field(pattern=r"^[a-f0-9]{32}$")
     NextSequence: int = Field(gt=0, le=9223372036854775807)
     Gate: Literal["available", "unavailable", "pending", "indeterminate"]
-    Choices: list[HostChoice] = Field(max_length=1)
+    Choices: list[HostChoice] = Field(max_length=256)
+    Diagnostic: Literal["native_pending", "host_choice_required", "completed_card_in_original_hand",
+                        "awaiting_host_readiness", "native_failure", "enqueue_ambiguous"] | None = None
 
     @model_validator(mode="after")
     def check_gate(self):
