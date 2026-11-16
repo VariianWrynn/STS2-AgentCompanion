@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/LocalAiTeammate/HostTest/HostObservationMailbox.cs" Link="HostObservationMailbox.cs" />
+    <Compile Include="../../src/LocalAiTeammate/HostTest/HostIdentityPolicy.cs" Link="HostIdentityPolicy.cs" />
+    <Compile Include="../../src/LocalAiTeammate/HostTest/HostTestTransport.cs" Link="HostTestTransport.cs" />
+    <Compile Include="../../src/LocalAiTeammate/HostTest/HostObservation.cs" Link="HostObservation.cs" />
+  </ItemGroup>
+</Project>
