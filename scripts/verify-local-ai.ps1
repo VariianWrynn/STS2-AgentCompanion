@@ -3,9 +3,11 @@ param(
     [string]$RunDir,
     [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Slay the Spire 2',
     [string]$SteamExe = 'D:\Steam\steam.exe',
-    [string]$BuildDir
+    [string]$BuildDir,
+    [switch]$HostBridge
 )
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('HostBridge') -and $Action -ne 'Launch') { throw 'HostBridge is supported only for Launch.' }
 $project = Split-Path $PSScriptRoot -Parent
 $evidenceRoot = Join-Path $project 'artifacts\verification'
 $lockPath = Join-Path $evidenceRoot 'active.lock'
@@ -62,9 +64,14 @@ if ($Action -eq 'Launch') {
     } finally { $lock.Dispose() }
     $session = [ordered]@{ scope='local-ai-gameplay'; status='launching'; runDir=$RunDir; requestedUtc=[datetime]::UtcNow.ToString('o'); process=$null; gameDir=$GameDir; gameVersion=$release; log=(Join-Path $RunDir 'game.log'); verification='NOT_TESTED' }
     Write-Json $session (Join-Path $RunDir 'session.json')
+    Import-Module (Join-Path $PSScriptRoot 'LocalAiLaunch.psm1') -Force
+    $launch = New-LocalAiSteamLaunch -RunDir $RunDir -GameDir $GameDir -HostBridge:$HostBridge
+    if ($launch.HostBridge) {
+        $session.hostBridge = $launch.HostBridge
+        Write-Json $session (Join-Path $RunDir 'session.json')
+    }
     Get-ChildItem -LiteralPath (Join-Path $GameDir 'mods') -Directory | Select-Object -ExpandProperty Name | ConvertTo-Json -AsArray | Set-Content -LiteralPath (Join-Path $RunDir 'installed-mods.json')
-    $logArg = '"' + $session.log + '"'
-    Start-Process -FilePath $SteamExe -ArgumentList '-applaunch','2868840','--log-file',$logArg -WindowStyle Hidden
+    Start-Process -FilePath $SteamExe -ArgumentList $launch.Arguments -WindowStyle Hidden
     $deadline = [datetime]::UtcNow.AddSeconds(45)
     do {
         $games = Game-Processes
