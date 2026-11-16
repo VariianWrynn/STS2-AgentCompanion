@@ -26,6 +26,18 @@ $run = & .\scripts\verify-local-ai.ps1 -Action Launch -GameDir $gameDir -SteamEx
 
 Launch refuses an existing STS2 process or verification lock. On a timeout, inspect the saved session and any late process before retrying. Do not delete the lock to retry blindly.
 
+To enable the optional host bridge for an owned test launch, add `-HostBridge` to `-Action Launch`. This switch is rejected for every other action.
+
+```powershell
+$run = & .\scripts\verify-local-ai.ps1 -Action Launch -GameDir $gameDir -HostBridge
+```
+
+Launch writes `host-bridge.json` inside the new run directory. The file contains a fresh cryptographic 32-hex token, an IPv4 loopback port, and the SHA256 of the selected installed `sts2.dll`. Treat this local file as a secret. Do not print or publish its contents. `session.json` records only the config path, port, hash, and enabled state. The port is available when selected, but another process can bind it before the game starts. A launch does not establish that the bridge is listening.
+
+Steam receives `--` followed by `--local-ai-host-bridge-config=<absolute-path>` as one quoted game user argument. This does not depend on environment inheritance by an already running Steam process. Ordinary launches create no bridge config. The bridge must also exist in the installed mod. Its capabilities and process attestation require separate runtime checks.
+
+Run `./scripts/test-local-ai-launch.ps1` for offline fixture checks. Add `-InstalledGameDir $gameDir` to check the generated hash against the actual installed assembly without launching the game. The checks exercise config generation and Windows argument parsing. They do not verify delivery through Steam, game startup, profile isolation, or gameplay.
+
 Doctor checks process identity, responsiveness and the window handle. It does not confirm the profile or mod behavior. Through Computer Use, inspect the owned window and select a separate empty test profile. Confirm the selected profile in the UI before creating a run. Never infer profile isolation from the launch command or Doctor output.
 
 Create a two-player game with the local AI as the second player. Inspect both characters, AI readiness, card play, turn completion, rewards and navigation. Record the actual observed journey and failures. For screenshots, import `scripts/capture-gameplay.mjs` in the Computer Use Node session and call `saveFrame(runDir, state, outputDir, name, note)` with a fresh owned-window state. Execute the returned copy command to retain the image and its metadata in the run directory.
