@@ -13,6 +13,7 @@ internal static class HostTurnRegression
     {
         public bool Completed { get; set; }
         public bool Failed { get; set; }
+        public void Dispose() { }
     }
 
     private sealed class NativeBoundary : IHostTurnBoundary
@@ -25,7 +26,10 @@ internal static class HostTurnRegression
         internal object? IssuedActor;
         internal bool Throw;
         public HostTurnContext? Read() => Context;
-        public IHostTurnAction EndTurn(HostTurnContext context)
+        public HostCommand.PlayCard[] Cards(HostTurnContext context) => [];
+        public bool CanPlay(HostTurnContext context, HostCommand.PlayCard card) => false;
+        public bool InOriginalHand(HostCommand.PlayCard card) => true;
+        public IHostTurnAction Dispatch(HostTurnContext context, HostCommand command)
         {
             Calls++;
             IssuedPlayerTurn = context.Turn;
@@ -90,6 +94,8 @@ internal static class HostTurnRegression
         }
 
         VerifyCombatSettlement();
+        await HostCardRegression.Run();
+        NativeActionRegression.Run();
 
         long clock = Stopwatch.GetTimestamp();
         boundary = new NativeBoundary();

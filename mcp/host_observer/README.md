@@ -1,6 +1,6 @@
 # Observe and submit a local host choice through MCP
 
-This stdio server exposes `observe_host()` and `submit_host(sequence, observation, choice)`. Observation returns detached host and AI state plus an opaque offered native `EndTurn` choice from the optional [host bridge](../../docs/host-mcp.md). Every observation retains `Compatibility: runtime_unverified`. The adapter never selects an action and never addresses the AI actor.
+This stdio server exposes `observe_host()` and `submit_host(sequence, observation, choice)`. Observation returns detached host and AI state plus opaque offered native `EndTurn` and bounded `PlayCard` choices from the optional [host bridge](../../docs/host-mcp.md). Every observation retains `Compatibility: runtime_unverified`. The adapter never selects an action and never addresses the AI actor.
 
 ## Start the observer
 
@@ -22,9 +22,9 @@ The adapter sends authenticated requests to `127.0.0.1` at the configured port. 
 
 The observer validates the detached record schema and compares the reported assembly hash with the configured hash. Errors expose fixed messages rather than backend bodies, credentials, or configuration paths. Hash comparison alone does not establish ownership. The external verifier must attest the PID, process start time, executable, installed assembly, and empty test profile before consuming observations.
 
-Use the observed `Submission.NextSequence`, `Submission.Observation`, and `Submission.Choices[0].Key` only when the gate is `available`. A fresh observation invalidates the prior offer. The bridge revalidates native host identity and readiness on the game thread before dispatch. It exposes no launch, profile, lobby, shell, card, or other action tool. Offline success does not establish native lifecycle, gameplay compatibility, or companion correctness.
+Use the observed `Submission.NextSequence`, `Submission.Observation`, and the chosen `Submission.Choices` entry's `Key` only when the gate is `available`. A fresh observation invalidates the prior offer. The bridge revalidates native host identity and readiness on the game thread before dispatch. Card choices cover exact StrikeIronclad, DefendIronclad, and Bash types. They use the same three-argument submission tool. There is no launch, profile, lobby, or shell tool. Offline success does not establish native lifecycle, gameplay compatibility, or companion correctness.
 
-After a lost response, timeout, or `in_flight` receipt, retry exactly the same sequence, observation, and choice. Identical latest retries return the original terminal receipt before freshness checks. Never replace an uncertain submission with a new sequence. `submitted` means native queue submission, not settled gameplay. Poll observations to diagnose the pending gate. `indeterminate` blocks further host mutations and requires ending the owned test and reviewing evidence before a fresh test process. See the [full receipt and sequence contract](../../docs/host-mcp.md#submit-an-offered-host-choice).
+After a lost response, timeout, or `in_flight` receipt, retry exactly the same sequence, observation, and choice. Identical latest retries return the original terminal receipt before freshness checks. Never replace an uncertain submission with a new sequence. `submitted` means native queue submission, not settled gameplay. Poll observations to read the pending gate and nullable `Submission.Diagnostic`. Detected hand selection reports `host_choice_required` and stays blocked. Other unresolved native choices can remain generic pending. A completed card still in its original hand reports `completed_card_in_original_hand` and stays blocked. `indeterminate` blocks further host mutations and requires ending the owned test and reviewing evidence before a fresh test process. See the [full receipt and sequence contract](../../docs/host-mcp.md#submit-an-offered-host-choice).
 
 ## Run the offline regression
 
@@ -34,4 +34,4 @@ Run the regression with the same isolated Python environment that contains the p
 & artifacts/verification/host-observer-venv/Scripts/python.exe tests/HostObserverRegression/test_observer.py
 ```
 
-The regression uses the real SDK `Client` over stdio and a test-owned fake loopback backend. It checks both tool schemas, structured observations and receipts, all scope values, strict submission arguments, actor and extra-argument rejection, zero-body POST headers, authorization, proxy bypass, redirect refusal, unavailable backend, timeout, slow headers, malformed data, size limits, identity mismatch, and sanitized failures. It does not launch the game or open a profile.
+The regression uses the real SDK `Client` over stdio and a test-owned fake loopback backend. It checks both tool schemas, structured observations and receipts, all scope values, bounded card choices, strict card kinds, pending diagnostics, strict submission arguments, actor and extra-argument rejection, zero-body POST headers, authorization, proxy bypass, redirect refusal, unavailable backend, timeout, slow headers, malformed data, size limits, identity mismatch, and sanitized failures. It does not launch the game or open a profile.

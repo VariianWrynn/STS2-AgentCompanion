@@ -1,4 +1,10 @@
 using System.Diagnostics;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Cards;
+using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Helpers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Godot;
@@ -10,7 +16,6 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.GameActions;
-using MegaCrit.Sts2.Core.Entities.Actions;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.ScreenContext;
@@ -31,6 +36,7 @@ internal sealed class HostTestBridge : IDisposable
     private Action? _removeQueueListener;
     private object? _queueSet;
     private long _nativeRevision;
+    private readonly List<NativeAction> _actions = [];
     private readonly HostTestTransport _transport;
     private bool _disposed;
 
@@ -73,7 +79,7 @@ internal sealed class HostTestBridge : IDisposable
                 process.MainModule?.FileName, gameAssembly, hash, version);
             if (Engine.GetMainLoop() is not SceneTree tree) throw new InvalidOperationException("No scene tree.");
             _ = new HostTestBridge(tree, config, identity);
-            Log.Info("[HostTest] Host observation and EndTurn bridge enabled. Runtime compatibility remains unverified.");
+            Log.Info("[HostTest] Host observation and bounded native command bridge enabled. Runtime compatibility remains unverified.");
         }
         catch (Exception exception)
         {
@@ -165,25 +171,90 @@ internal sealed class HostTestBridge : IDisposable
         var stamp = JsonSerializer.Serialize(new { observation.Host, observation.Ai, readiness, Revision = _nativeRevision,
             Cards = combat.Hand.Cards.Select(RuntimeHelpers.GetHashCode).ToArray(),
             AiTurns = run.Players.Select(p => p.PlayerCombatState?.TurnNumber).ToArray() });
-        return new HostTurnContext(session, run, host, combatState, hand, room, combat.TurnNumber, play, ready, readiness.Allows, stamp);
+        return new HostTurnContext(session, run, host, combatState, hand, room, combat.TurnNumber, play, ready, readiness.Allows, stamp, readiness.InSelection);
     }
 
     private sealed class NativeBoundary(HostTestBridge bridge) : IHostTurnBoundary
     {
         public HostTurnContext? Read() => bridge.ReadTurn();
-        public IHostTurnAction EndTurn(HostTurnContext context)
+
+        public HostCommand.PlayCard[] Cards(HostTurnContext context)
         {
             var host = (Player)context.Host;
-            var action = new EndPlayerTurnAction(host, host.PlayerCombatState!.TurnNumber);
-            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(action);
-            return new NativeAction(action);
+            var hand = (NPlayerHand)context.Hand;
+            var result = new List<HostCommand.PlayCard>();
+            var cards = host.PlayerCombatState!.Hand.Cards;
+            for (var index = 0; index < cards.Count && result.Count < 255; index++)
+            {
+                var card = cards[index];
+                if (!Supported(card)) continue;
+                var holder = hand.GetCardHolder(card);
+                if (holder is null) continue;
+                IEnumerable<Creature?> targets = card.TargetType == TargetType.Self ? new Creature?[] { null } :
+                    host.Creature.CombatState!.HittableEnemies.Cast<Creature?>();
+                foreach (var target in targets)
+                {
+                    var label = $"Play {card.GetType().Name} hand {index + 1}" +
+                        (target is null ? " on self" : $" on enemy {target.CombatId}");
+                    var command = new HostCommand.PlayCard(card, target, holder, host.PlayerCombatState.Hand, label, target?.CombatId);
+                    if (CanPlay(context, command)) result.Add(command);
+                    if (result.Count == 255) break;
+                }
+            }
+            return result.ToArray();
         }
-    }
 
-    private sealed class NativeAction(GameAction action) : IHostTurnAction
-    {
-        public bool Completed => action.CompletionTask.IsCompleted || action.State == GameActionState.Finished;
-        public bool Failed => action.Exception is not null || action.CompletionTask.IsFaulted || action.CompletionTask.IsCanceled || action.State == GameActionState.Canceled;
+        private static bool Supported(CardModel card) =>
+            (card.GetType() == typeof(StrikeIronclad) || card.GetType() == typeof(DefendIronclad) || card.GetType() == typeof(Bash)) &&
+            card.Enchantment is null && card.Affliction is null && !card.EnergyCost.CostsX && !card.HasStarCostX &&
+            card.TargetType is TargetType.AnyEnemy or TargetType.Self;
+
+        public bool CanPlay(HostTurnContext context, HostCommand.PlayCard command)
+        {
+            var host = (Player)context.Host;
+            var hand = (NPlayerHand)context.Hand;
+            var card = (CardModel)command.Card;
+            var holder = (NCardHolder)command.Holder;
+            var target = (Creature?)command.Target;
+            if (!context.Eligible || hand.PeekButton.IsPeeking || !Supported(card) ||
+                !ReferenceEquals(card.Owner, host) || !ReferenceEquals(command.OriginalHand, host.PlayerCombatState?.Hand) ||
+                !InOriginalHand(command) || !GodotObject.IsInstanceValid(holder) || !holder.IsInsideTree() ||
+                !GodotObject.IsInstanceValid(holder.CardNode) || !holder.CardNode.IsInsideTree() || !ReferenceEquals(holder.CardModel, card) ||
+                !ReferenceEquals(hand.GetCardHolder(card), holder)) return false;
+            if (card.TargetType == TargetType.Self ? target is not null || command.TargetCombatId is not null :
+                target is null || !target.IsAlive || target.CombatId is null || target.CombatId != command.TargetCombatId ||
+                !ReferenceEquals(target.CombatState, context.Combat) ||
+                !host.Creature.CombatState!.HittableEnemies.Any(enemy => ReferenceEquals(enemy, target))) return false;
+            return card.CanPlayTargeting(target);
+        }
+
+        public bool InOriginalHand(HostCommand.PlayCard command) =>
+            ((CardPile)command.OriginalHand).Cards.Any(card => ReferenceEquals(card, command.Card));
+
+        public IHostTurnAction Dispatch(HostTurnContext context, HostCommand command)
+        {
+            var host = (Player)context.Host;
+            GameAction action = command switch
+            {
+                HostCommand.EndTurn => new EndPlayerTurnAction(host, host.PlayerCombatState!.TurnNumber),
+                HostCommand.PlayCard card => new PlayCardAction((CardModel)card.Card, (Creature?)card.Target),
+                _ => throw new InvalidOperationException("Unsupported host command.")
+            };
+            var tracked = new NativeAction(action, item => bridge._actions.Remove(item));
+            bridge._actions.Add(tracked);
+            try
+            {
+                if (command is HostCommand.PlayCard play)
+                    TaskHelper.RunSafely(((CardModel)play.Card).OnEnqueuePlayVfx((Creature?)play.Target));
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(action);
+                return tracked;
+            }
+            catch
+            {
+                tracked.Dispose();
+                throw;
+            }
+        }
     }
 
     private static HostPlayerObservation Project(Player player) => new(player.NetId,
@@ -199,6 +270,9 @@ internal sealed class HostTestBridge : IDisposable
         _tree.ProcessFrame -= OnFrame;
         _tree.Root.TreeExiting -= Dispose;
         _removeNativeListeners();
+        _commands.Dispose();
+        foreach (var action in _actions.ToArray()) action.Dispose();
+        _actions.Clear();
         _transport.Dispose();
     }
 }
