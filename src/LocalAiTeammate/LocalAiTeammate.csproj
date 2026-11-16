@@ -1,0 +1,25 @@
+<Project Sdk="Godot.NET.Sdk/4.5.1">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Sts2LlmCoop</RootNamespace>
+    <AssemblyName>LocalAiTeammate</AssemblyName>
+    <ImplicitUsings>true</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GodotDisabledSourceGenerators>GodotPluginsInitializer</GodotDisabledSourceGenerators>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">E:/SteamLibrary/steamapps/common/Slay the Spire 2/data_sts2_windows_x86_64</Sts2DataDir>
+    <OutputPath>../../artifacts/build/LocalAiTeammate/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="sts2"><HintPath>$(Sts2DataDir)/sts2.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Publicize Include="sts2" IncludeVirtualMembers="false" IncludeCompilerGeneratedMembers="false" />
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.0" PrivateAssets="All" />
+    <Content Include="LocalAiTeammate.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="config/ai-behavior/*.aiconfig" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CheckGameReference" BeforeTargets="CoreCompile">
+    <Error Text="Set Sts2DataDir to the STS2 v0.113.x data directory." Condition="!Exists('$(Sts2DataDir)/sts2.dll')" />
+  </Target>
+</Project>
