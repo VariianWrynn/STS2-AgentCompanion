@@ -41,24 +41,28 @@ def block(marker):
 text = ACTIONS.read_text(encoding='utf-8-sig')
 # Take the whole producer rather than reconstructing its lambda in the fixture.
 kind = text.index('ActionType = AiTeammateActionKind.EndTurn.ToString()')
-start = text.rfind('        actions.Add(', 0, kind)
+start = text.rfind('        IssuedPlayerTurn issued =', 0, kind)
 if start < 0:
     raise ValueError('Combat EndTurn producer statement was not found.')
 end = text.index('        return actions;', start)
 producer = source_slice(ACTIONS, start, end, 'combat EndTurn producer')
 text = CONTROLLER.read_text(encoding='utf-8-sig')
 fields = []
-for name in ['_nextDecisionAtUtc', '_lastCompletedEndTurnRound',
-             '_lastCombatRoundWithInitialStagger', '_pendingIssuedActionSettlement']:
+for name in ['_nextDecisionAtUtc', '_lastFinishedEndTurn',
+             '_lastCombatRoundWithInitialStagger', '_pendingIssuedActionSettlement',
+             '_isExecutingAction', '_executionFailed', '_lastDeduplicationKey']:
     match = re.search(r'^    private [^\n]*\b' + name + r'\b[^\n]*;', text, re.M)
     if not match:
         raise ValueError('Review source extraction for changed field: ' + name)
     fields.append(source_slice(CONTROLLER, match.start(), match.end(), name))
 methods = [block(marker) for marker in [
+    '    private async Task ExecuteResolvedActionAsync(',
+    '    private static string DescribeTrackedAction(',
     '    private bool ShouldSuppressRepeatedEndTurn(',
     '    private void ResetCompletedEndTurnTrackingIfNeeded(',
     '    private static bool IsCombatEndTurnAction(',
     '    private static bool IsEndTurnAction(',
+    '    private static void ValidateEndTurnExecution(',
     '    private void BeginIssuedActionSettlement(',
     '    private bool TryWaitForIssuedActionSettlement()',
     '    private sealed class PendingIssuedActionSettlement']]

@@ -5,7 +5,13 @@ using MegaCrit.Sts2.Core.GameActions;
 // No game, Godot or queue scheduling runs in this regression.
 namespace MegaCrit.Sts2.Core.Combat
 {
-    public sealed class CombatState { public int RoundNumber { get; set; } = 1; }
+    public sealed class CombatState
+    {
+        public int RoundNumber { get; set; } = 1;
+        // Deliberately equal by value so production must use reference identity.
+        public override bool Equals(object? other) => other is CombatState;
+        public override int GetHashCode() => 0;
+    }
 }
 namespace MegaCrit.Sts2.Core.Entities.Players
 {
@@ -31,6 +37,8 @@ namespace MegaCrit.Sts2.Core.GameActions
         public GameActionState State { get; private set; } = GameActionState.Running;
         public Exception? Exception { get; set; }
         public void Finish() { State = GameActionState.Finished; _completion.SetResult(); }
+        public void Cancel() { State = GameActionState.Canceled; _completion.SetCanceled(); }
+        public void Fault() { State = GameActionState.Finished; _completion.SetException(new InvalidOperationException("test fault")); }
     }
 }
 namespace MegaCrit.Sts2.Core.GameActions.Multiplayer { }
@@ -91,6 +99,12 @@ namespace Sts2LlmCoop
         { player = Player; state = new(); return true; }
         private static bool IsQueueSettledForReplan(PendingIssuedActionSettlement settlement) => true;
         private static void WriteAudit(string kind, string id, string type) { }
+        public Task Execute(AiTeammateAvailableAction action) => ExecuteResolvedActionAsync(action);
+        public bool ExecutionFailed => _executionFailed;
+        public IssuedPlayerTurn? PendingIdentity => _pendingIssuedActionSettlement?.IssuedEndTurn;
+        public bool HasPending => _pendingIssuedActionSettlement != null;
+        public string? LastDeduplicationKey => _lastDeduplicationKey;
+        public void MissingWindow() => ResetCompletedEndTurnTrackingIfNeeded(null, false);
         public void Track(AiTeammateAvailableAction action, AiActionExecutionResult result)
             => BeginIssuedActionSettlement(action, result);
         public void Settle()
