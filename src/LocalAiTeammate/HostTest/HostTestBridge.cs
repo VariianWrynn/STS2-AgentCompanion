@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using MegaCrit.Sts2.Core.Models;
-using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -187,15 +186,26 @@ internal sealed class HostTestBridge : IDisposable
             for (var index = 0; index < cards.Count && result.Count < 255; index++)
             {
                 var card = cards[index];
-                if (!Supported(card)) continue;
+                var targeting = HostCardPolicy.TargetFor(card);
+                if (targeting is null) continue;
                 var holder = hand.GetCardHolder(card);
                 if (holder is null) continue;
-                IEnumerable<Creature?> targets = card.TargetType == TargetType.Self ? new Creature?[] { null } :
-                    host.Creature.CombatState!.HittableEnemies.Cast<Creature?>();
+                IEnumerable<Creature?> targets = targeting.Value switch
+                {
+                    TargetType.Self or TargetType.AllEnemies => new Creature?[] { null },
+                    TargetType.AnyEnemy => host.Creature.CombatState!.HittableEnemies.Cast<Creature?>(),
+                    _ => Array.Empty<Creature?>()
+                };
                 foreach (var target in targets)
                 {
                     var label = $"Play {card.GetType().Name} hand {index + 1}" +
-                        (target is null ? " on self" : $" on enemy {target.CombatId}");
+                        (targeting.Value switch
+                        {
+                            TargetType.Self => " on self",
+                            TargetType.AllEnemies => " on all enemies",
+                            TargetType.AnyEnemy => $" on enemy {target!.CombatId}",
+                            _ => throw new InvalidOperationException()
+                        });
                     var command = new HostCommand.PlayCard(card, target, holder, host.PlayerCombatState.Hand, label, target?.CombatId);
                     if (CanPlay(context, command)) result.Add(command);
                     if (result.Count == 255) break;
@@ -204,11 +214,6 @@ internal sealed class HostTestBridge : IDisposable
             return result.ToArray();
         }
 
-        private static bool Supported(CardModel card) =>
-            (card.GetType() == typeof(StrikeIronclad) || card.GetType() == typeof(DefendIronclad) || card.GetType() == typeof(Bash)) &&
-            card.Enchantment is null && card.Affliction is null && !card.EnergyCost.CostsX && !card.HasStarCostX &&
-            card.TargetType is TargetType.AnyEnemy or TargetType.Self;
-
         public bool CanPlay(HostTurnContext context, HostCommand.PlayCard command)
         {
             var host = (Player)context.Host;
@@ -216,16 +221,21 @@ internal sealed class HostTestBridge : IDisposable
             var card = (CardModel)command.Card;
             var holder = (NCardHolder)command.Holder;
             var target = (Creature?)command.Target;
-            if (!context.Eligible || hand.PeekButton.IsPeeking || !Supported(card) ||
+            var targeting = HostCardPolicy.TargetFor(card);
+            if (!context.Eligible || hand.PeekButton.IsPeeking || targeting is null ||
                 !ReferenceEquals(card.Owner, host) || !ReferenceEquals(command.OriginalHand, host.PlayerCombatState?.Hand) ||
                 !InOriginalHand(command) || !GodotObject.IsInstanceValid(holder) || !holder.IsInsideTree() ||
                 !GodotObject.IsInstanceValid(holder.CardNode) || !holder.CardNode.IsInsideTree() || !ReferenceEquals(holder.CardModel, card) ||
                 !ReferenceEquals(hand.GetCardHolder(card), holder)) return false;
-            if (card.TargetType == TargetType.Self ? target is not null || command.TargetCombatId is not null :
-                target is null || !target.IsAlive || target.CombatId is null || target.CombatId != command.TargetCombatId ||
-                !ReferenceEquals(target.CombatState, context.Combat) ||
-                !host.Creature.CombatState!.HittableEnemies.Any(enemy => ReferenceEquals(enemy, target))) return false;
-            return card.CanPlayTargeting(target);
+            var validTarget = targeting.Value switch
+            {
+                TargetType.Self or TargetType.AllEnemies => target is null && command.TargetCombatId is null,
+                TargetType.AnyEnemy => target is not null && target.IsAlive && target.CombatId is not null &&
+                    target.CombatId == command.TargetCombatId && ReferenceEquals(target.CombatState, context.Combat) &&
+                    host.Creature.CombatState!.HittableEnemies.Any(enemy => ReferenceEquals(enemy, target)),
+                _ => false
+            };
+            return validTarget && card.CanPlayTargeting(target);
         }
 
         public bool InOriginalHand(HostCommand.PlayCard command) =>
