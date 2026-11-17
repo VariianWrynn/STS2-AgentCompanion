@@ -132,9 +132,9 @@ Queue listeners attach when native run setup creates the queue and rebind when i
 
 ## Bounded card choices
 
-An available observation contains at most 256 choices. EndTurn uses one slot. Each remaining `PlayCard` key identifies an exact native card and target pair. Labels contain the native type, hand position, and either the enemy combat ID or self. Keys carry the identity. A caller cannot select a card, actor, or target by supplying an ID. Labels are at most 128 characters.
+An available observation contains at most 256 choices. EndTurn uses one slot. Each remaining `PlayCard` key identifies an exact native card and target pair. Labels contain the native type, hand position, and the enemy combat ID, self, or all enemies. Keys carry the identity. A caller cannot select a card, actor, or target by supplying an ID. Labels are at most 128 characters.
 
-The supported cards are the exact native `StrikeIronclad`, `DefendIronclad`, and `Bash` types, including their upgraded forms. Enchantments, afflictions, energy X costs, and star X costs are excluded. Only `AnyEnemy` and `Self` targeting are supported. Self uses a null native target.
+The supported cards are the exact native `StrikeIronclad`, `DefendIronclad`, `Bash`, `TwinStrike`, `Thunderclap`, `Uppercut`, `Inflame`, `ShrugItOff`, and `PommelStrike` types, including their upgraded forms. Enchantments, afflictions, energy X costs, and star X costs are excluded. Each type must retain its expected native target category. Only `AnyEnemy`, `Self`, and `AllEnemies` targeting are supported. Self and AllEnemies each use one choice with a null native target and null target combat ID. AllEnemies does not create a separate choice per enemy. Native `CanPlayTargeting` still decides legality when no enemies are enumerated.
 
 Offer and dispatch both check native `CanPlayTargeting`. Dispatch also rechecks ownership, reference membership in the original authoritative hand, the exact live holder and card node, and the hand peek state. An enemy must remain alive and hittable in the same native combat, with its original combat ID. The bridge runs native enqueue VFX and requests a retained `PlayCardAction` through the synchronizer. Native code owns resource spending, pile movement, and queue UI.
 
